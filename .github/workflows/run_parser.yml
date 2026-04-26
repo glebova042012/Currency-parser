@@ -1,0 +1,29 @@
+name: Daily Currency Parser
+
+on:
+  schedule:
+    # cron: минута час день-месяца месяц день-недели
+    # UTC+0, для 10:00 и 15:00 по Москве (UTC+3) нужно вычесть 3 часа
+    - cron: '0 7,12 * * *'  # В 7:00 UTC = 10:00 МСК, в 12:00 UTC = 15:00 МСК
+  workflow_dispatch:         # Эта строчка добавит кнопку для ручного запуска
+
+jobs:
+  run-parser:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        pip install requests beautifulsoup4 gspread oauth2client
+          
+    - name: Run parser
+      env:
+        GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS }}
+      run: python parser.py
