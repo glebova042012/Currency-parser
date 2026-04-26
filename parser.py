@@ -9,7 +9,7 @@ import json
 
 # --- НАСТРОЙКИ ---
 # ID вашей таблицы Google Sheets
-SPREADSHEET_ID = "1J9GQiTZvq5GBqXaKZoNWCuSv4GnWunIG4KoI_2FJYHU" 
+SPREADSHEET_ID = "18G-knN3JXYjMQCL02qrl8nyJ3QOzT7jX94gvODMxw-4" 
 # Название листа, куда будет писаться история
 WORKSHEET_NAME = "RUB_TJS_daily"
 # -----------------
