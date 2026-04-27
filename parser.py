@@ -4,8 +4,9 @@ from bs4 import BeautifulSoup
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-import time
 import json
+import time
+from typing import Dict, Tuple, List
 
 # --- НАСТРОЙКИ ---
 # ID вашей таблицы Google Sheets
