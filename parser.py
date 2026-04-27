@@ -15,16 +15,14 @@ SPREADSHEET_ID = "18G-knN3JXYjMQCL02qrl8nyJ3QOzT7jX94gvODMxw-4"
 WORKSHEET_NAME = "RUB_TJS_daily"
 # -----------------
 
-def get_rub_rates_for_date(target_date_str: str) -> tuple[Dict[str, float], str]:
+def get_rub_rates() -> Dict[str, float]:
     """
-    Парсит курсы безналичной продажи RUB/TJS для заданной даты.
-    Возвращает:
-      - словарь {название_банка: курс}
-      - строку даты/времени, полученную с сайта (или пустую строку)
-    Если данные за указанную дату отсутствуют – возвращает ({}, "").
+    Парсит курсы безналичной продажи RUB/TJS на ТЕКУЩУЮ дату.
+    Возвращает словарь {название_банка: курс}.
     """
+    today = datetime.now().strftime("%Y-%m-%d")
     url = "https://nbt.tj/ru/kurs/kurs_kommer_bank.php"
-    params = {"currency": "RUB", "date": target_date_str}
+    params = {"currency": "RUB", "date": today}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
@@ -32,32 +30,32 @@ def get_rub_rates_for_date(target_date_str: str) -> tuple[Dict[str, float], str]
         resp.raise_for_status()
         resp.encoding = "utf-8"
     except requests.RequestException as e:
-        print(f"❌ Ошибка запроса для {target_date_str}: {e}")
-        return {}, ""
+        print(f"❌ Ошибка запроса для {today}: {e}")
+        return {}
 
     soup = BeautifulSoup(resp.text, "html.parser")
     table = soup.find("table")
     if not table:
-        print(f"⚠️ Таблица не найдена для {target_date_str}")
-        return {}, ""
+        print(f"❌ Таблица не найдена для {today}")
+        return {}
 
     header_row = table.find("tr")
     if not header_row:
-        return {}, ""
-    headers = [th.get_text(strip=True) for th in header_row.find_all("th")]
+        return {}
+
+    headers_list = [th.get_text(strip=True) for th in header_row.find_all("th")]
 
     try:
-        col_bank = headers.index("Кредитные финансовые организации")
-        col_sell_noncash = headers.index("Безналичные продажа")
-        col_date = headers.index("Дата")
+        col_bank = headers_list.index("Кредитные финансовые организации")
+        col_sell_noncash = headers_list.index("Безналичные продажа")
+        col_date = headers_list.index("Дата")
     except ValueError as e:
         print(f"❌ Ошибка заголовков: {e}")
-        return {}, ""
+        return {}
 
     result = {}
-    datetime_value = ""
     rows = table.find_all("tr")[1:]
-    target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+    target_date_obj = datetime.strptime(today, '%Y-%m-%d').date()
 
     for row in rows:
         cells = row.find_all("td")
@@ -70,10 +68,10 @@ def get_rub_rates_for_date(target_date_str: str) -> tuple[Dict[str, float], str]
         except (ValueError, IndexError):
             continue
 
-        # Проверка: совпадает ли дата на сайте с запрашиваемой
+        # Проверка: дата на сайте должна совпадать с запрашиваемой
         if actual_date_obj != target_date_obj:
-            print(f"⚠️ Данные за {target_date_str} отсутствуют. Сайт вернул {actual_date_obj}")
-            return {}, ""  # данные не за ту дату
+            print(f"⚠️ Данные за {today} не найдены. Сайт вернул {actual_date_obj}")
+            return {}
 
         bank = cells[col_bank].get_text(strip=True)
         sell_raw = cells[col_sell_noncash].get_text(strip=True)
@@ -84,49 +82,62 @@ def get_rub_rates_for_date(target_date_str: str) -> tuple[Dict[str, float], str]
 
         if sell is not None:
             result[bank] = sell
-            if not datetime_value:
-                datetime_value = raw_datetime
 
-    return result, datetime_value
+    return result
 
-def save_to_gsheet(bank_rates):
-    """Сохраняет данные в Google Sheets."""
+def save_to_gsheet(bank_rates: Dict[str, float]) -> None:
+    """Сохраняет курсы в Google Sheets (длинный формат: дата_запроса, дата_курса, банк, курс)."""
     if not bank_rates:
-        print("Нет данных для сохранения")
+        print("❌ Нет данных для сохранения")
         return
 
-    # --- АВТОРИЗАЦИЯ ЧЕРЕЗ СЕРВИСНЫЙ АККАУНТ (БЕЗ УЧАСТИЯ ЧЕЛОВЕКА) ---
-    # Данные для входа хранятся в секретах GitHub (настроим позже)
+    # Читаем секрет с ключами сервисного аккаунта
     creds_json = os.environ.get("GOOGLE_CREDS")
     if not creds_json:
-        print("Ошибка: Не найдены учетные данные Google")
+        print("❌ Ошибка: переменная окружения GOOGLE_CREDS не найдена")
         return
-        
-    creds_dict = json.loads(creds_json)
+
+    try:
+        creds_dict = json.loads(creds_json)
+    except json.JSONDecodeError:
+        print("❌ Ошибка: GOOGLE_CREDS содержит невалидный JSON")
+        return
+
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    # ------------------------------------------------------------
 
-    sh = client.open_by_key(SPREADSHEET_ID)
+    # Открываем таблицу
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+    except gspread.exceptions.APIError as e:
+        print(f"❌ Ошибка доступа к таблице: {e}")
+        print("   Убедитесь, что email сервисного аккаунта добавлен в редакторы таблицы.")
+        return
+
+    # Получаем или создаём лист
     try:
         ws = sh.worksheet(WORKSHEET_NAME)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=4)
         ws.append_row(["datetime_request", "date_rate", "bank", "sell_rate"])
+        print(f"📄 Создан новый лист '{WORKSHEET_NAME}'")
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     date_rate_str = datetime.now().strftime("%Y-%m-%d")
-    rows_to_add = []
+    rows_to_add = [[now_str, date_rate_str, bank, rate] for bank, rate in bank_rates.items()]
 
-    for bank, rate in bank_rates.items():
-        rows_to_add.append([now_str, date_rate_str, bank, rate])
-    
     if rows_to_add:
         ws.append_rows(rows_to_add, value_input_option="USER_ENTERED")
-        print(f"Сохранено {len(rows_to_add)} записей")
+        print(f"✅ Сохранено {len(rows_to_add)} записей")
+    else:
+        print("❌ Нет записей для сохранения")
 
 if __name__ == "__main__":
-    print(f"Запуск в {datetime.now()}")
+    print(f"🚀 Запуск в {datetime.now()}")
     rates = get_rub_rates()
+    print(f"📊 Получено банков: {len(rates)}")
+    if rates:
+        print(f"📈 Пример: {list(rates.items())[:2]}")
     save_to_gsheet(rates)
+    print("✅ Скрипт выполнен")
