@@ -14,29 +14,79 @@ SPREADSHEET_ID = "18G-knN3JXYjMQCL02qrl8nyJ3QOzT7jX94gvODMxw-4"
 WORKSHEET_NAME = "RUB_TJS_daily"
 # -----------------
 
-def get_rub_rates():
-    """Парсит курсы продажи RUB/TJS на СЕГОДНЯ."""
-    today = datetime.now().strftime("%Y-%m-%d")
+def get_rub_rates_for_date(target_date_str: str) -> tuple[Dict[str, float], str]:
+    """
+    Парсит курсы безналичной продажи RUB/TJS для заданной даты.
+    Возвращает:
+      - словарь {название_банка: курс}
+      - строку даты/времени, полученную с сайта (или пустую строку)
+    Если данные за указанную дату отсутствуют – возвращает ({}, "").
+    """
     url = "https://nbt.tj/ru/kurs/kurs_kommer_bank.php"
-    params = {"currency": "RUB", "date": today}
+    params = {"currency": "RUB", "date": target_date_str}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=15)
-        response.raise_for_status()
-        response.encoding = "utf-8"
-    except Exception as e:
-        print(f"Ошибка запроса: {e}")
-        return {}
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+    except requests.RequestException as e:
+        print(f"❌ Ошибка запроса для {target_date_str}: {e}")
+        return {}, ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
     table = soup.find("table")
     if not table:
-        return {}
-    # ... (Здесь вставьте ВЕСЬ ваш код ПАРСИНГА из ячейки 3, 
-    # который возвращает словарь {bank: rate}) ...
-    # Упрощенный пример возврата:
-    return {"Банк А": 0.1234, "Банк Б": 0.5678}
+        print(f"⚠️ Таблица не найдена для {target_date_str}")
+        return {}, ""
 
+    header_row = table.find("tr")
+    if not header_row:
+        return {}, ""
+    headers = [th.get_text(strip=True) for th in header_row.find_all("th")]
+
+    try:
+        col_bank = headers.index("Кредитные финансовые организации")
+        col_sell_noncash = headers.index("Безналичные продажа")
+        col_date = headers.index("Дата")
+    except ValueError as e:
+        print(f"❌ Ошибка заголовков: {e}")
+        return {}, ""
+
+    result = {}
+    datetime_value = ""
+    rows = table.find_all("tr")[1:]
+    target_date_obj = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+
+    for row in rows:
+        cells = row.find_all("td")
+        if len(cells) <= max(col_bank, col_sell_noncash, col_date):
+            continue
+
+        raw_datetime = cells[col_date].get_text(strip=True)
+        try:
+            actual_date_obj = datetime.strptime(raw_datetime.split()[0], '%d.%m.%Y').date()
+        except (ValueError, IndexError):
+            continue
+
+        # Проверка: совпадает ли дата на сайте с запрашиваемой
+        if actual_date_obj != target_date_obj:
+            print(f"⚠️ Данные за {target_date_str} отсутствуют. Сайт вернул {actual_date_obj}")
+            return {}, ""  # данные не за ту дату
+
+        bank = cells[col_bank].get_text(strip=True)
+        sell_raw = cells[col_sell_noncash].get_text(strip=True)
+        try:
+            sell = float(sell_raw) if sell_raw and sell_raw != "0.0000" else None
+        except ValueError:
+            sell = None
+
+        if sell is not None:
+            result[bank] = sell
+            if not datetime_value:
+                datetime_value = raw_datetime
+
+    return result, datetime_value
 
 def save_to_gsheet(bank_rates):
     """Сохраняет данные в Google Sheets."""
